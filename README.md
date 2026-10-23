@@ -1,57 +1,93 @@
-# Youth Career Hub website
+# Youth Career Hub (YCH): website, CMS and admin dashboard
 
-This is a responsive public website for Youth Career Hub (YCH), designed for students and graduates in Tanzania. It is a static front-end package with working public interactions. It is **not yet a deployed full-stack CMS**; the secure CMS hand-off is documented below rather than misrepresented as working.
+Next.js 16 · React 19 · TypeScript 5.9 · Tailwind CSS 4 · Supabase (Postgres, Auth, Storage) · Vercel · Resend (email).
+Versions are pinned in `package-lock.json` (Next 16.4.2, React 19.3.1, Supabase JS 2.118, @supabase/ssr 0.12.7, Zod 4.6, Sharp 0.35).
 
-## Open locally
+**What it is:** a public site (Home, About, Events & Activities + detail pages, Mission, Programmes & Projects + detail pages,
+Resources & Opportunities + detail pages, Contact, Privacy, 404) plus a protected `/admin` where YCH staff manage everything
+without coding: events and photo galleries, programmes, opportunities, team, logo/hero photos, page text, contact enquiries.
 
-Open `index.html` in a current web browser. No build tools or installation are required.
+## 1. Run it locally
+```bash
+npm install
+cp .env.example .env.local      # fill in the values (steps below)
+npm run dev                      # http://localhost:3000
+npm test                         # 20 automated tests
+npm run typecheck && npm run build
+```
+Without any `.env` the site still runs: public pages show honest empty states, the contact form says it is *not connected*, and `/admin` explains Supabase is missing.
 
-## Pages
+## 2. Connect Supabase (database, login, photo storage)
+1. Create a free project at https://supabase.com. Note **Project URL**, **anon key**, **service_role key** (Project Settings → API).
+2. SQL Editor → run, in order: `supabase/migrations/0001_schema.sql` then `0002_storage.sql`.
+   (Optional) run `supabase/seed.sql`. It loads the six programme areas from the original website as **drafts**; nothing becomes public until you press Publish.
+3. Authentication → Providers → Email: keep enabled. **Disable "Allow new users to sign up"** (Authentication → Sign In / Providers) so only people you invite can ever have an account. Even if someone did sign up they would not be an admin (see below).
+4. Put the three values in `.env.local` (and in Vercel). The service-role key is **server only**: never prefix it with `NEXT_PUBLIC_`, never commit it.
 
-- `index.html` — Home
-- `about.html` — About YCH
-- `mission.html` — Mission, vision and commitments
-- `programmes.html` — Programme framework
-- `events.html` — Searchable and filterable activity gallery
-- `event.html?id=…` — Activity detail page with photo lightbox and sharing controls
-- `resources.html` — Searchable career reflection, application and safety guides
-- `contact.html` — Contact and enquiry form
-- `privacy.html` — Current privacy notice
-- `404.html` — Custom not-found page
+## 3. Create the first administrator (securely)
+1. Supabase → Authentication → Users → **Add user** → enter the admin's email + a strong password (tick "Auto confirm").
+2. SQL Editor, run once (replace the email):
+```sql
+update public.profiles set is_admin = true
+where id = (select id from auth.users where email = 'admin@yourdomain.org');
+```
+3. Sign in at `/admin/login`. Admin rights exist **only** in the database; no one can grant them from the website. Add more admins the same way.
 
-## Working interactions
+## 4. Contact form delivery
+Enquiries are validated on the server, protected by a honeypot, a minimum-fill-time check and a per-visitor limit (5/hour, by hashed IP),
+saved in `enquiries` (visible in `/admin/enquiries`) and, if configured, emailed through Resend. The visitor sees "received" **only** if the
+enquiry was actually saved or emailed. Configure: `SUPABASE_SERVICE_ROLE_KEY` (storage), and `RESEND_API_KEY` + `CONTACT_TO_EMAIL` + `CONTACT_FROM_EMAIL`
+(email; verify a sending domain at resend.com for production; `onboarding@resend.dev` only works for testing). Set `IP_HASH_SALT` to a long random string.
 
-- Responsive mobile navigation with keyboard-accessible controls.
-- Programme-area and career-guide search/filter controls with clear empty states.
-- Event gallery search, category/year/status filters, Load More control and a clear count.
-- Event detail view with an accessible modal photo gallery, captions, sharing control and back-to-top button.
-- Form validation, consent acknowledgement and a transparent mail-client handoff; it does not pretend to submit a form to a backend.
+## 5. Deploy to Vercel
+1. Push this folder to GitHub (see §7). 2. https://vercel.com → Add New Project → import the repo (framework: Next.js, defaults are right).
+3. Settings → Environment Variables: add everything from `.env.example` (set `NEXT_PUBLIC_SITE_URL` to your final https address). 4. Deploy.
+5. **Custom domain:** Project → Settings → Domains → add `yourdomain.org` and follow the DNS records Vercel shows at your registrar. Then update `NEXT_PUBLIC_SITE_URL` and redeploy.
+6. Production check: open `/admin/login`, sign in, publish a test event with a photo, view it publicly, then delete it.
 
-All event records in `data.js` are explicitly labelled sample content. They exist only to demonstrate the gallery. They must be replaced with confirmed YCH records and authorised photography before public publication.
+## 6. Security model (how access is enforced)
+- **Database (Row Level Security):** public can read only `published` rows; only `is_admin()` can create/edit/delete; `profiles` has no client write policy (nobody can self-promote); `enquiries` has no public policy at all. Tested on a real Postgres (see Testing).
+- **Storage:** bucket `media` is public-read; insert/update/delete only for admins; images only (JPG/PNG/WebP), 5 MB max after processing.
+- **Server:** every admin page and action calls `requireAdmin()`; the upload API checks admin again; `proxy.ts` redirects signed-out visitors. Hiding the link is *not* the protection.
+- **Uploads:** photos are resized in the browser (Vercel limits requests to ~4.5 MB), then re-encoded server-side with Sharp to WebP ≤2000 px; EXIF metadata (including GPS location) is stripped.
+- Security headers set in `next.config.ts`; `/admin` and `/api` are `noindex` and disallowed in `robots.txt`; no cookies for ordinary visitors.
 
-## Before publishing
+## 7. Move from the old static repo to this project (GitHub)
+```bash
+git clone https://github.com/collinsmwacha16-ai/YCH-website.git && cd YCH-website
+git checkout -b platform-v2
+mkdir legacy-static && git mv *.html *.css *.js .env.example legacy-static/ 2>/dev/null   # keep the old site for reference
+# copy everything from this project's folder into the repo root (NOT node_modules/.next), then:
+git add -A && git commit -m "Next.js + Supabase platform with admin dashboard"
+git push -u origin platform-v2          # open a Pull Request on GitHub, review, then merge to main
+```
+Never commit `.env.local` (already in `.gitignore`).
 
-1. Confirm the email address, telephone number and location in `contact.html` and across the footer. They were preserved from the supplied source file; confirm they are the organisation's current public details.
-2. The contact form deliberately opens the visitor's email application. It does not send or store messages itself. Connect a secure form service or backend before claiming online submissions are delivered.
-3. Add only confirmed event dates, programmes, partners, opportunity listings and impact figures. The design intentionally does not invent these facts.
-4. Add official social-profile URLs if and when they are available. No placeholder social links were included.
-5. The page uses externally hosted editorial images from Unsplash. For a production launch, replace them with licensed, authentic YCH/Tanzanian photography and include appropriate permissions and image credits.
-6. Review and replace `privacy.html` with an organisation-approved privacy notice before collecting any personal data through a third-party form service or user accounts.
+## 8. Testing
+**Automated (`npm test`, 20 tests):** slug/URL/search sanitising, enquiry validation, the contact form's honesty rules (never reports success unless saved/emailed; honeypot; too-fast; provider errors), and that every dropdown option and admin field in `cfg.ts` matches the SQL constraints/columns.
+**Done during the build:** `tsc` clean; production build; every public route returns 200, unknown slugs 404, `/admin*` redirects to login, upload API returns 401 when signed out; no secrets in the client bundle; security headers present; migrations + RLS policies run and verified on a real PostgreSQL 16 using a stand-in for Supabase's `auth`/`storage` schemas (anon sees only published rows; a normal user cannot write or self-promote; enquiries are admin-only; storage writes are admin-only).
+**Manual checklist after you connect Supabase (please do all):**
+- [ ] Sign in/out; wrong password shows an error; a non-admin account is refused.
+- [ ] Create event → add 3+ photos (watch progress) → caption/alt → set cover → Publish → appears on /events with filters, detail page, lightbox (keyboard ← → Esc), Load more.
+- [ ] Unpublish/archive → disappears publicly; a draft previewed while signed in shows the yellow Preview banner. Delete asks for confirmation and removes the photos.
+- [ ] Add a programme and a resource (deadline in the past → shows **Expired**); search, filters and sort work.
+- [ ] Site content: replace logo and hero, edit mission text, add social links; empty sections stay hidden.
+- [ ] Contact form: submit → appears in /admin/enquiries (and in your inbox if Resend is set); submit with wrong env → shows "NOT sent".
+- [ ] Phone check (Android + iPhone): menu, forms, gallery, admin upload from camera roll. Run Lighthouse on the live URL.
 
-## Secure CMS hand-off
+## 9. Known limitations (honest list)
+- The admin flows (login, save, upload, delete) were **not run against a live Supabase project** here; the SQL/RLS and form logic were tested, the end-to-end click-through is on your checklist above.
+- No photo reordering (photos show in upload order); no rich-text editor (paragraphs separated by blank lines); resources are loaded up to 300 per search.
+- No newsletter and no user accounts/mentor registration yet (deliberately not faked). The schema/admin pattern makes both easy to add.
+- Visitor privacy notice is a plain-language draft; have it reviewed against Tanzania's Personal Data Protection Act before launch.
+- Google Fonts load from Google (a visitor IP is shared with Google). Self-host the fonts if that matters to you.
+- Mission/vision/history/leadership are blank until you write them: nothing official has been invented.
 
-The package includes a Supabase schema, RLS policies, private image-storage policy, environment-variable template and a deployment/testing guide:
-
-- `.env.example`
-- `supabase/migrations/20261023_ych_content_schema.sql`
-- `docs/CMS-DEPLOYMENT.md`
-
-No migration has been applied and no Supabase or email credentials have been created. The CMS, secure `/admin` dashboard, persistent uploads and server-side contact submission must be completed in a YCH-owned Supabase/Vercel project. Follow `docs/CMS-DEPLOYMENT.md`; it explains the first-admin setup, security model, required accounts and verification checklist.
-
-## Design and technical notes
-
-- `styles.css` includes desktop and mobile layouts, a keyboard-visible skip link, responsive navigation, and reduced-motion support.
-- `script.js` controls the public interactions and no data is stored in browser localStorage.
-- The resource page does not pretend to have live jobs or scholarships. It offers evergreen career guidance and explains how to evaluate third-party listings safely.
-- The site uses externally hosted editorial imagery from Unsplash. The images are illustrative stock images, not YCH activities; use consented and licensed YCH photography in production.
-
+## 10. External services (accounts / cost)
+| Service | Needed for | Cost |
+|---|---|---|
+| GitHub | source code & backups | free |
+| Supabase | database, login, photo storage | free tier to start (500 MB DB, 1 GB files); paid when you outgrow it |
+| Vercel | hosting | free "Hobby" tier is for non-commercial use; check if your organisation needs Pro |
+| Resend | email notifications | free tier (limited emails/day); needs a verified sending domain |
+| Domain name | custom address | yearly registrar fee |
